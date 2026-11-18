@@ -4,8 +4,8 @@ from django.contrib.auth.models import User
 from rest_framework.test import APIClient
 from rest_framework import status
 from .models import Document
-from .services import DocumentLifecycleService
-from .validators import validate_pdf_file, ValidationError
+from Backend.backend.apps.A_RAG.documents.services import DocumentLifecycleService
+from .validators import ValidationError
 
 class DocumentModelTest(TestCase):
     def test_document_creation(self):
