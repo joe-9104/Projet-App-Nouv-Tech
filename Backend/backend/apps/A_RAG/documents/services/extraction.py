@@ -1,11 +1,11 @@
 import logging
 from django.db import transaction
 from django.core.exceptions import ValidationError
-from .models import Document, ExtractedDocument, DocumentFigure
-from .services import DocumentLifecycleService
-from .adapter_mineru import MinerUAdapter
-from .normalizer import DocumentNormalizer
-from .storage_figures import FigureStorageService
+from ..models import Document, ExtractedDocument, DocumentFigure
+from . import DocumentLifecycleService
+from ..adapter_mineru import MinerUAdapter
+from ..normalizer import DocumentNormalizer
+from ..storage_figures import FigureStorageService
 
 logger = logging.getLogger(__name__)
 
