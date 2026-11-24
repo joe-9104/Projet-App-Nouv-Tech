@@ -1,5 +1,7 @@
+import re
 from django.core.exceptions import ValidationError
-from .models import Document
+from django.db import transaction
+from .models import Document, FigurePassageAssociation
 
 class DocumentLifecycleService:
     """

@@ -45,22 +45,24 @@ class DocumentNormalizer:
 
             blocks = page.get('blocks', [])
             for block in blocks:
-                normalized_block = self._normalize_block(block)
+                normalized_block = self._normalize_block(block, page_idx)
                 normalized_page["blocks"].append(normalized_block)
 
             normalized["pages"].append(normalized_page)
 
         return normalized
 
-    def _normalize_block(self, block: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_block(self, block: Dict[str, Any], page_idx: int) -> Dict[str, Any]:
         """
         Normalizes a single block.
         """
         block_type = block.get('type', 'unknown')
 
         # Preserve basic structure
+        source_index = block.get('index')
         normalized_block = {
-            "source_index": block.get('index'),
+            "block_id": f"blk_{page_idx}_{source_index}" if source_index is not None else None,
+            "source_index": source_index,
             "type": block_type,
             "bbox": block.get('bbox'), # Source coordinates
             "level": block.get('level'),

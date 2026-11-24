@@ -37,8 +37,10 @@ Le système A comprend **8 tickets**, pour un total de **27 points**.
 
 - **DOC-01 :** terminé pour le développement indépendant du système A. L'intégration finale liée à l'authentification et à l'isolation des utilisateurs reste dépendante des tickets transversaux concernés.
 - **DOC-02 :** terminé pour le développement indépendant du système A. Le traitement MinerU et la normalisation sont implémentés dans le cadre convenu.
-- **DOC-03 :** prochain ticket à implémenter ; ce document fournit à l'agent IA le contexte du backlog.
-- **VIS-01, VIS-02, RAG-01, RAG-02 et RAG-03 :** à réaliser selon le backlog et leurs dépendances.
+- **DOC-03 :** terminé pour le développement indépendant du système A. La liste et la consultation des documents sont implémentées avec l'isolation des données prévue, en attente du raccordement final à l'intégration transversale concernée si nécessaire.
+- **VIS-01 :** terminé pour le développement indépendant du système A. Les figures sont conservées avec leur référence stable, leur provenance documentaire, leurs métadonnées et un accès privé lié au propriétaire du document.
+- **VIS-02 :** terminé pour le développement indépendant du système A. Les relations explicites figure-passage sont enregistrées avec leur provenance et un niveau d'incertitude `high`, `medium` ou `low`.
+- **RAG-01, RAG-02 et RAG-03 :** à réaliser selon le backlog et leurs dépendances.
 
 > « Terminé indépendamment » ne signifie pas que toutes les intégrations transversales sont achevées. En particulier, l'authentification et l'isolation des données doivent être raccordées lorsque les tickets AUTH correspondants seront disponibles.
 

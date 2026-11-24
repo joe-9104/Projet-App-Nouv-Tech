@@ -13,7 +13,8 @@ from rest_framework.test import APIClient
 
 from .models import Document, DocumentFigure, ExtractedDocument
 from .normalizer import DocumentNormalizer
-from .services import DocumentLifecycleService
+from .services import DocumentLifecycleService, FigurePassageAssociationService
+from .models import FigurePassageAssociation
 from .services.extraction import ExtractionService
 from .storage_figures import FigureStorageService
 from .validators import MAX_FILE_SIZE, ValidationError
@@ -609,6 +610,108 @@ class DocumentDetailAPITest(TestCase):
         """Un identifiant non conforme au format UUID renvoie un 404 au niveau du routage."""
         response = self.client.get('/api/documents/invalid-uuid-string/')
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class VisualAssetsAndAssociationsTest(TestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(username='visual_owner', password='password')
+        self.other = User.objects.create_user(username='visual_other', password='password')
+        self.document = Document.objects.create(
+            original_filename='cuda.pdf', file_data=b'%PDF-1.4', owner=self.owner,
+            status=Document.Status.READY,
+        )
+        self.extracted = ExtractedDocument.objects.create(
+            document=self.document,
+            extraction_metadata={'engine': 'MinerU', 'version': 'test'},
+            normalized_content={
+                'schema_version': '1.0',
+                'pages': [{'page_index': 0, 'blocks': [
+                    {'block_id': 'blk_0_1', 'source_index': 1, 'type': 'text', 'bbox': [10, 10, 300, 100], 'content': 'Figure 1 explains thread organisation.'},
+                    {'block_id': 'blk_0_2', 'source_index': 2, 'type': 'text', 'bbox': [10, 200, 300, 260], 'content': 'A remote paragraph.'},
+                ]}],
+            },
+        )
+
+    def make_figure(self, page=0, bbox=None, caption='Figure 1: thread organisation'):
+        return DocumentFigure.objects.create(
+            extracted_document=self.extracted,
+            reference_id=f'img_{self.document.id.hex}_{page}_1',
+            page_index=page,
+            storage_path='private_figures/test_figure.png',
+            mime_type='image/png',
+            caption=caption,
+            bbox=bbox or [20, 20, 200, 120],
+            dimensions=[180, 100],
+            source_block_id='3',
+            source_block_ids=['3'],
+        )
+
+    def test_stable_figure_metadata_and_private_asset_access(self):
+        figure = self.make_figure()
+        self.assertEqual(figure.reference_id, f'img_{self.document.id.hex}_0_1')
+        self.assertEqual(figure.extracted_document.document, self.document)
+        self.assertEqual(figure.page_index, 0)
+        self.assertIsNone(figure.metadata.get('invented'))
+
+        client = APIClient()
+        default_storage.save(figure.storage_path, io.BytesIO(b'not-a-real-png'))
+        client.force_authenticate(user=self.owner)
+        response = client.get(f'/api/documents/{self.document.id}/assets/{figure.id}')
+        self.assertEqual(response.status_code, 200)
+        response.close()
+
+        client.force_authenticate(user=self.other)
+        denied = client.get(f'/api/documents/{self.document.id}/assets/{figure.id}')
+        self.assertEqual(denied.status_code, 404)
+        default_storage.delete(figure.storage_path)
+
+    def test_explicit_reference_is_high_and_idempotent(self):
+        figure = self.make_figure()
+        service = FigurePassageAssociationService(self.extracted)
+        created = service.associate_all(self.extracted.normalized_content)
+        created_again = service.associate_all(self.extracted.normalized_content)
+
+        association = FigurePassageAssociation.objects.filter(
+            figure=figure,
+            provenance__reasons=['explicit_figure_reference'],
+        ).first()
+        self.assertIsNotNone(association)
+        self.assertEqual(association.confidence, FigurePassageAssociation.Confidence.HIGH)
+        self.assertIn('explicit_figure_reference', association.provenance['reasons'])
+        self.assertEqual(len(created_again), 2)
+        self.assertEqual(FigurePassageAssociation.objects.filter(figure=figure).count(), 2)
+
+    def test_spatial_association_is_medium_and_unrelated_page_block_is_not_linked(self):
+        figure = self.make_figure(bbox=[20, 20, 200, 120])
+        service = FigurePassageAssociationService(self.extracted)
+        associations = service.associate_all(self.extracted.normalized_content)
+        self.assertTrue(all(a.confidence in ('high', 'medium') for a in associations))
+
+        self.extracted.normalized_content['pages'][0]['blocks'][1]['bbox'] = [900, 900, 950, 950]
+        self.extracted.save(update_fields=['normalized_content'])
+        associations = service.associate_all(self.extracted.normalized_content)
+        related_ids = {a.passage_block_id for a in associations}
+        self.assertNotIn('blk_0_2', related_ids)
+
+    def test_no_association_without_evidence_and_cross_extraction_is_rejected(self):
+        figure = self.make_figure(caption='Unknown diagram')
+        self.extracted.normalized_content = {'pages': [{'page_index': 0, 'blocks': [
+            {'source_index': 1, 'type': 'text', 'bbox': [800, 800, 900, 900], 'content': 'Nothing related.'}
+        ]}]}
+        self.extracted.save(update_fields=['normalized_content'])
+        created = FigurePassageAssociationService(self.extracted).associate_all(self.extracted.normalized_content)
+        self.assertEqual(created, [])
+
+        other_document = Document.objects.create(original_filename='other.pdf', file_data=b'%PDF', owner=self.owner)
+        other_extracted = ExtractedDocument.objects.create(document=other_document, extraction_metadata={}, normalized_content={'pages': []})
+        with self.assertRaises(ValueError):
+            FigurePassageAssociation.objects.create(
+                figure=figure,
+                extracted_document=other_extracted,
+                passage_block_id='blk_0_1',
+                page_index=0,
+                confidence=FigurePassageAssociation.Confidence.HIGH,
+            )
 
 
 class DocumentSecurityAndAuthTest(TestCase):

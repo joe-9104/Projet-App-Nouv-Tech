@@ -3,8 +3,10 @@ from rest_framework import permissions, status, viewsets
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from django.core.files.storage import default_storage
+from django.http import FileResponse, Http404
 
-from .models import Document
+from .models import Document, DocumentFigure
 from .serializers import DocumentResponseSerializer, DocumentUploadSerializer
 from .validators import validate_pdf_file
 
@@ -56,6 +58,26 @@ class DocumentUploadView(APIView):
 
         response_serializer = DocumentResponseSerializer(document)
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+
+class DocumentFigureAssetView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, document_id, asset_id):
+        figure = DocumentFigure.objects.select_related(
+            'extracted_document__document'
+        ).filter(
+            id=asset_id,
+            extracted_document__document_id=document_id,
+            extracted_document__document__owner=request.user,
+        ).first()
+        if not figure or not default_storage.exists(figure.storage_path):
+            raise Http404
+
+        file = default_storage.open(figure.storage_path, 'rb')
+        response = FileResponse(file, content_type=figure.mime_type)
+        response['X-Content-Type-Options'] = 'nosniff'
+        return response
 
 
 class DocumentViewSet(viewsets.ReadOnlyModelViewSet):

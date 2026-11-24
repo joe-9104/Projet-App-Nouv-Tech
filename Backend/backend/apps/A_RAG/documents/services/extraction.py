@@ -1,5 +1,6 @@
 import logging
 from django.db import transaction
+from django.core.files.storage import default_storage
 from django.core.exceptions import ValidationError
 from ..models import Document, ExtractedDocument, DocumentFigure
 from . import DocumentLifecycleService
@@ -35,27 +36,57 @@ class ExtractionService:
             # 3. Normalize content
             normalized_content = self.normalizer.normalize(middle_data, structured_data)
 
-            # 4. Extract and store figures
-            # We use structured_data as a source for figures as per observations
+            # 4. Prepare figure files and metadata without removing a previous extraction
             figures_metadata = self._extract_figures(structured_data, document)
 
-            # 5. Persist results
-            with transaction.atomic():
-                ext_doc = ExtractedDocument.objects.create(
-                    document=document,
-                    extraction_metadata={
-                        "engine": "MinerU",
-                        "version": "4.0.12", # Should be dynamic in production
-                        "schema_version": self.normalizer.SCHEMA_VERSION,
-                    },
-                    normalized_content=normalized_content
-                )
-
-                for fig in figures_metadata:
-                    DocumentFigure.objects.create(
-                        extracted_document=ext_doc,
-                        **fig
+            # 5. Persist results atomically; only remove replaced private files after commit
+            old_paths = list(ExtractedDocument.objects.filter(document=document).values_list('normalized_content', flat=True))
+            replaced_paths = []
+            try:
+                with transaction.atomic():
+                    ext_doc, _ = ExtractedDocument.objects.update_or_create(
+                        document=document,
+                        defaults={
+                            "extraction_metadata": {
+                                "engine": "MinerU",
+                                "version": "4.0.12",
+                                "schema_version": self.normalizer.SCHEMA_VERSION,
+                            },
+                            "normalized_content": normalized_content,
+                        }
                     )
+
+                    previous_figures = list(ext_doc.figures.all())
+                    previous_paths = {figure.storage_path for figure in previous_figures}
+                    current_references = set()
+
+                    for fig in figures_metadata:
+                        reference_id = fig.pop('reference_id')
+                        current_references.add(reference_id)
+                        DocumentFigure.objects.update_or_create(
+                            extracted_document=ext_doc,
+                            reference_id=reference_id,
+                            defaults=fig,
+                        )
+
+                    removed_figures = ext_doc.figures.exclude(reference_id__in=current_references)
+                    removed_paths = set(removed_figures.values_list('storage_path', flat=True))
+                    removed_figures.delete()
+
+                    from . import FigurePassageAssociationService
+                    FigurePassageAssociationService(ext_doc).associate_all(normalized_content)
+
+                replaced_paths = list(previous_paths - {fig['storage_path'] for fig in figures_metadata})
+                for path in replaced_paths:
+                    if default_storage.exists(path):
+                        default_storage.delete(path)
+
+            except Exception:
+                for fig in figures_metadata:
+                    path = fig.get('storage_path')
+                    if path and default_storage.exists(path):
+                        default_storage.delete(path)
+                raise
 
             # 6. Transition to ready
             DocumentLifecycleService.transition_to(document, Document.Status.READY)
@@ -100,13 +131,20 @@ class ExtractionService:
                             mime_type
                         )
 
+                        source_index = block.get('index')
+                        source_block_id = str(source_index if source_index is not None else f"image_{page_idx}_{len(figs)}")
+                        reference_id = f"img_{document.id.hex}_{page_idx}_{source_block_id}"
                         figs.append({
+                            "reference_id": reference_id,
                             "page_index": page_idx,
                             "storage_path": path,
                             "mime_type": mime_type,
                             "caption": block.get('caption'),
                             "bbox": block.get('bbox'),
-                            "source_block_id": str(block.get('index', 'unknown'))
+                            "dimensions": block.get('dimensions'),
+                            "metadata": block.get('metadata', {}) if isinstance(block.get('metadata'), dict) else {},
+                            "source_block_id": source_block_id,
+                            "source_block_ids": [source_block_id],
                         })
                     except Exception as e:
                         logger.warning(f"Failed to process figure in page {page_idx}: {e}")
