@@ -84,6 +84,7 @@ class DocumentUploadAPITest(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.user = User.objects.create_user(username='testuser', password='password')
+        self.client.force_authenticate(user=self.user)
 
     def test_upload_success(self):
         uploaded_pdf = SimpleUploadedFile('test.pdf', b'%PDF-1.4 binary content', content_type='application/pdf')
@@ -123,13 +124,11 @@ class DocumentUploadAPITest(TestCase):
         self.assertIn('exceeds the maximum limit', response.data['error'])
 
     def test_upload_ownership_unauthenticated(self):
-        self.client.logout()
+        self.client.force_authenticate(user=None)
         uploaded_pdf = SimpleUploadedFile('test.pdf', b'%PDF-1.4 binary content', content_type='application/pdf')
         response = self.client.post('/api/documents/upload/', {'file': uploaded_pdf}, format='multipart')
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-
-        doc = Document.objects.first()
-        self.assertIsNone(doc.owner)
+        self.assertIn(response.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
+        self.assertEqual(Document.objects.count(), 0)
 
     def test_upload_ownership_authenticated(self):
         self.client.force_authenticate(user=self.user)
@@ -573,6 +572,14 @@ class DocumentDetailAPITest(TestCase):
             status=Document.Status.READY,
             owner=self.other_user
         )
+
+    def test_owner_can_download_pdf_but_other_user_cannot(self):
+        owner_response = self.client.get(f'/api/documents/{self.alice_doc.id}/file/')
+        self.assertEqual(owner_response.status_code, status.HTTP_200_OK)
+
+        self.client.force_authenticate(user=self.other_user)
+        denied_response = self.client.get(f'/api/documents/{self.alice_doc.id}/file/')
+        self.assertEqual(denied_response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_owner_can_consult_own_document_individually(self):
         """Cas 7 : Le propriétaire peut consulter individuellement son document."""

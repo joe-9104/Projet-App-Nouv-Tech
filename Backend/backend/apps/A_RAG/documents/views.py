@@ -23,6 +23,8 @@ class DocumentUploadView(APIView):
     """
     DOC-01: Endpoint to import a PDF file and create a Document record.
     """
+    permission_classes = [permissions.IsAuthenticated]
+
     def post(self, request, *args, **kwargs):
         # Check if 'file' is present in request.FILES first
         if 'file' not in request.FILES:
@@ -55,11 +57,26 @@ class DocumentUploadView(APIView):
             original_filename=uploaded_file.name,
             file_data=file_content,
             status=Document.Status.PENDING,
-            owner=request.user if request.user.is_authenticated else None
+            owner=request.user
         )
 
         response_serializer = DocumentResponseSerializer(document)
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+
+class DocumentFileView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, document_id):
+        document = Document.objects.filter(id=document_id, owner=request.user).first()
+        if not document:
+            raise Http404
+        return FileResponse(
+            bytes(document.file_data),
+            content_type='application/pdf',
+            as_attachment=True,
+            filename=document.original_filename,
+        )
 
 
 class DocumentFigureAssetView(APIView):

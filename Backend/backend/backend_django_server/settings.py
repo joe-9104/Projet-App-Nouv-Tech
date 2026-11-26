@@ -24,12 +24,12 @@ load_dotenv(BASE_DIR / ".env")
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-mzr&7+a+jr)t74m%hh_8rpyn+_*1o87q%ch0)jvaiy^6^x7sv-'
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'django-insecure-development-only')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [host.strip() for host in os.environ.get('DJANGO_ALLOWED_HOSTS', '127.0.0.1,localhost,testserver').split(',') if host.strip()]
 
 
 # Application definition
@@ -43,6 +43,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'apps.A_RAG.documents',
+    'apps.authentication',
 ]
 
 MIDDLEWARE = [
@@ -138,3 +139,15 @@ RAG_CHUNK_TARGET_CHARS = int(os.environ.get('RAG_CHUNK_TARGET_CHARS', '800'))
 RAG_CHUNK_MAX_CHARS = int(os.environ.get('RAG_CHUNK_MAX_CHARS', '1600'))
 RAG_SEARCH_TOP_K = int(os.environ.get('RAG_SEARCH_TOP_K', '5'))
 RAG_RELEVANCE_THRESHOLD = float(os.environ.get('RAG_RELEVANCE_THRESHOLD', '0.20'))
+
+GOOGLE_OAUTH_CLIENT_ID = os.environ.get('GOOGLE_OAUTH_CLIENT_ID', '')
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': ['rest_framework.authentication.SessionAuthentication'],
+    'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.IsAuthenticated'],
+}
+
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = os.environ.get('SESSION_COOKIE_SAMESITE', 'Lax')
+SESSION_COOKIE_SECURE = os.environ.get('SESSION_COOKIE_SECURE', '0') == '1'
+CSRF_COOKIE_SECURE = os.environ.get('CSRF_COOKIE_SECURE', '0') == '1'
