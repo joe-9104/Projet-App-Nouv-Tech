@@ -2,6 +2,7 @@ import uuid
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.conf import settings
+from pgvector.django import VectorField
 
 class Document(models.Model):
     class Status(models.TextChoices):
@@ -76,6 +77,29 @@ class DocumentFigure(models.Model):
 
     def __str__(self):
         return f"Figure in {self.extracted_document.document.original_filename} page {self.page_index}"
+
+
+class DocumentChunk(models.Model):
+    id = models.CharField(max_length=64, primary_key=True)
+    extracted_document = models.ForeignKey(ExtractedDocument, on_delete=models.CASCADE, related_name='chunks')
+    document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name='chunks')
+    text = models.TextField()
+    page_start = models.IntegerField()
+    page_end = models.IntegerField()
+    section_title = models.CharField(max_length=512, null=True, blank=True)
+    block_ids = models.JSONField(default=list, blank=True)
+    hierarchy = models.JSONField(default=list, blank=True)
+    figure_refs = models.JSONField(default=list, blank=True)
+    embedding = VectorField(dimensions=384)
+    embedding_model = models.CharField(max_length=255)
+    generation = models.CharField(max_length=64)
+    indexed_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['document', 'generation'], name='chunk_document_generation_idx'),
+            models.Index(fields=['document', 'page_start', 'page_end'], name='chunk_document_pages_idx'),
+        ]
 
 
 class FigurePassageAssociation(models.Model):

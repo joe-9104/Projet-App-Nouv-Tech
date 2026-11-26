@@ -130,3 +130,11 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# RAG-01 à RAG-03
+RAG_EMBEDDING_MODEL = os.environ.get('RAG_EMBEDDING_MODEL', 'paraphrase-multilingual-MiniLM-L12-v2')
+RAG_EMBEDDING_DIMENSIONS = int(os.environ.get('RAG_EMBEDDING_DIMENSIONS', '384'))
+RAG_CHUNK_TARGET_CHARS = int(os.environ.get('RAG_CHUNK_TARGET_CHARS', '800'))
+RAG_CHUNK_MAX_CHARS = int(os.environ.get('RAG_CHUNK_MAX_CHARS', '1600'))
+RAG_SEARCH_TOP_K = int(os.environ.get('RAG_SEARCH_TOP_K', '5'))
+RAG_RELEVANCE_THRESHOLD = float(os.environ.get('RAG_RELEVANCE_THRESHOLD', '0.20'))

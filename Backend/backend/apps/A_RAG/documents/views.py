@@ -8,6 +8,8 @@ from django.http import FileResponse, Http404
 
 from .models import Document, DocumentFigure
 from .serializers import DocumentResponseSerializer, DocumentUploadSerializer
+from .models import ExtractedDocument
+from .rag_indexing import DocumentIndexingService, DocumentSearchService, IndexingError, build_visual_assets
 from .validators import validate_pdf_file
 
 
@@ -78,6 +80,89 @@ class DocumentFigureAssetView(APIView):
         response = FileResponse(file, content_type=figure.mime_type)
         response['X-Content-Type-Options'] = 'nosniff'
         return response
+
+
+class DocumentSearchView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        document_id = request.data.get('document_id')
+        query = request.data.get('query')
+        page_range = request.data.get('page_range')
+        top_k = request.data.get('top_k', 5)
+
+        if not document_id or not isinstance(query, str) or not query.strip():
+            return Response({'error': 'document_id and query are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        document = Document.objects.filter(id=document_id, owner=request.user).first()
+        if not document:
+            raise Http404
+
+        try:
+            top_k = int(top_k)
+        except (TypeError, ValueError):
+            return Response({'error': 'top_k must be an integer.'}, status=status.HTTP_400_BAD_REQUEST)
+        top_k = max(1, min(top_k, 20))
+
+        if page_range is not None:
+            if not isinstance(page_range, dict):
+                return Response({'error': 'page_range must contain start and end.'}, status=status.HTTP_400_BAD_REQUEST)
+            start, end = page_range.get('start'), page_range.get('end')
+            if start is not None:
+                try:
+                    start = int(start)
+                except (TypeError, ValueError):
+                    return Response({'error': 'page_range start must be an integer.'}, status=status.HTTP_400_BAD_REQUEST)
+            if end is not None:
+                try:
+                    end = int(end)
+                except (TypeError, ValueError):
+                    return Response({'error': 'page_range end must be an integer.'}, status=status.HTTP_400_BAD_REQUEST)
+            if start is not None and end is not None and start > end:
+                return Response({'error': 'page_range start must not exceed end.'}, status=status.HTTP_400_BAD_REQUEST)
+            page_range = {'start': start, 'end': end}
+
+        try:
+            outcome = DocumentSearchService().search(document, query.strip(), page_range, top_k)
+        except IndexingError:
+            return Response({'error': 'The document search service is unavailable.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        results = []
+        for chunk in outcome['results']:
+            results.append({
+                'chunk_id': chunk.id,
+                'text': chunk.text,
+                'relevance_score': round(float(chunk.relevance_score), 4),
+                'source': {
+                    'page_start': chunk.page_start,
+                    'page_end': chunk.page_end,
+                    'section_title': chunk.section_title,
+                    'block_ids': chunk.block_ids,
+                },
+                'visual_assets': build_visual_assets(chunk),
+            })
+
+        response = {'document_id': str(document_id), 'results': results}
+        if outcome['status'] != 'ok':
+            response['status'] = outcome['status']
+        return Response(response)
+
+
+class DocumentIndexView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, document_id):
+        document = Document.objects.filter(id=document_id, owner=request.user).first()
+        if not document:
+            raise Http404
+        extracted = ExtractedDocument.objects.filter(document=document).first()
+        if not extracted:
+            return Response({'error': 'Document is not extracted yet.'}, status=status.HTTP_409_CONFLICT)
+        try:
+            generation, count = DocumentIndexingService().index_document(extracted)
+        except IndexingError:
+            return Response({'error': 'Indexing failed; no previous index was replaced.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return Response({'document_id': str(document.id), 'generation': generation, 'chunk_count': count})
 
 
 class DocumentViewSet(viewsets.ReadOnlyModelViewSet):

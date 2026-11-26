@@ -6,18 +6,20 @@ from unittest.mock import MagicMock, patch
 from django.contrib.auth.models import User
 from django.core.files.storage import default_storage
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from .models import Document, DocumentFigure, ExtractedDocument
+from .models import Document, DocumentFigure, ExtractedDocument, DocumentChunk
 from .normalizer import DocumentNormalizer
 from .services import DocumentLifecycleService, FigurePassageAssociationService
 from .models import FigurePassageAssociation
 from .services.extraction import ExtractionService
 from .storage_figures import FigureStorageService
 from .validators import MAX_FILE_SIZE, ValidationError
+from .rag import DocumentChunkService
+from .rag_indexing import DocumentIndexingService, DocumentSearchService
 
 
 # ==============================================================================
@@ -856,3 +858,84 @@ class DocumentSecurityAndAuthTest(TestCase):
         # DELETE sur le document individuel
         response_delete = self.client.delete(f'/api/documents/{self.doc_error.id}/')
         self.assertEqual(response_delete.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
+
+class DeterministicRagEncoder:
+    def encode(self, texts):
+        vectors = []
+        for text in texts:
+            value = sum((i + 1) * ord(char) for i, char in enumerate(text.lower())) % 384
+            vector = [0.0] * 384
+            vector[value] = 1.0
+            vectors.append(vector)
+        return vectors
+
+
+@override_settings(RAG_EMBEDDING_MODEL='test-encoder-v1', RAG_EMBEDDING_DIMENSIONS=384,
+                   RAG_RELEVANCE_THRESHOLD=0.0)
+class RagTicketsTest(TestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(username='rag_owner', password='password')
+        self.other = User.objects.create_user(username='rag_other', password='password')
+        self.document = Document.objects.create(original_filename='cuda.pdf', file_data=b'%PDF',
+                                                owner=self.owner, status=Document.Status.READY)
+        self.extracted = ExtractedDocument.objects.create(
+            document=self.document,
+            extraction_metadata={'engine': 'MinerU', 'schema_version': '1.0'},
+            normalized_content={'schema_version': '1.0', 'pages': [
+                {'page_index': 0, 'blocks': [
+                    {'block_id': 'blk_0_0', 'source_index': 0, 'type': 'title', 'level': 1,
+                     'content': 'Organisation CUDA'},
+                    {'block_id': 'blk_0_1', 'source_index': 1, 'type': 'text', 'level': 0,
+                     'content': 'Les threads sont organisés en blocs. Les blocs peuvent coopérer dans une grille.'},
+                ]},
+                {'page_index': 1, 'blocks': [
+                    {'block_id': 'blk_1_2', 'source_index': 2, 'type': 'subtitle', 'level': 2,
+                     'content': 'Organisation des threads'},
+                    {'block_id': 'blk_1_3', 'source_index': 3, 'type': 'text', 'level': 0,
+                     'content': 'Chaque thread possède un identifiant unique appelé threadIdx.'},
+                ]},
+            ]},
+        )
+
+    def test_structure_first_chunking_and_large_content_split(self):
+        chunks = DocumentChunkService().build_chunks(self.extracted)
+        self.assertGreaterEqual(len(chunks), 2)
+        self.assertTrue(all(chunk['text'].strip() for chunk in chunks))
+        self.assertEqual(chunks[0]['block_ids'][0], 'blk_0_1')
+        long_text = 'Une phrase complète. ' * 100
+        pieces = DocumentChunkService()._split_large_text(long_text, ['blk_0_1'], 0, 0,
+                                                           'Organisation CUDA', [], str(self.document.id))
+        self.assertGreater(len(pieces), 1)
+
+    def test_index_reindex_and_search_contract_pipeline(self):
+        encoder = DeterministicRagEncoder()
+        generation, count = DocumentIndexingService(encoder).index_document(self.extracted)
+        self.assertGreater(count, 0)
+        chunk = DocumentChunk.objects.filter(document=self.document).first()
+        self.assertEqual(len(chunk.embedding), 384)
+        self.assertEqual(chunk.embedding_model, 'test-encoder-v1')
+
+        generation_again, count_again = DocumentIndexingService(encoder).index_document(self.extracted)
+        self.assertEqual(generation, generation_again)
+        self.assertEqual(DocumentChunk.objects.filter(document=self.document).count(), count_again)
+
+        outcome = DocumentSearchService(encoder).search(self.document, 'threads blocs CUDA',
+                                                        {'start': 0, 'end': 1}, 5)
+        self.assertIn(outcome['status'], ('ok', 'insufficient_results'))
+        self.assertLessEqual(len(outcome['results']), 5)
+
+    def test_search_api_permission_and_no_index(self):
+        client = APIClient()
+        client.force_authenticate(user=self.owner)
+        response = client.post('/api/documents/search/', {
+            'document_id': str(self.document.id), 'query': 'CUDA', 'top_k': 5,
+        }, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['status'], 'not_indexed')
+
+        client.force_authenticate(user=self.other)
+        denied = client.post('/api/documents/search/', {
+            'document_id': str(self.document.id), 'query': 'CUDA',
+        }, format='json')
+        self.assertEqual(denied.status_code, 404)
