@@ -1,4 +1,5 @@
 import os
+import json
 import tempfile
 import logging
 from typing import Tuple, Optional, Dict, Any
@@ -44,7 +45,11 @@ class MinerUAdapter:
 
             # 3. Retrieve outputs
             middle_data = result.to_json()
+            if isinstance(middle_data, str):
+                middle_data = json.loads(middle_data)
             structured_data = result.structured_content()
+            if isinstance(structured_data, str):
+                structured_data = json.loads(structured_data)
 
             return middle_data, structured_data
         except Exception as e:

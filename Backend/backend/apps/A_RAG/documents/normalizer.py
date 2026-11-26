@@ -19,15 +19,19 @@ class DocumentNormalizer:
         """
         # Metadata extraction
         metadata = middle_data.get('metadata', {})
+        document_metadata = metadata.get('document', {}) if isinstance(metadata, dict) else {}
+        authors = document_metadata.get('authors', []) if isinstance(document_metadata, dict) else []
+        languages = document_metadata.get('languages', []) if isinstance(document_metadata, dict) else []
+        producer = metadata.get('producer') if isinstance(metadata, dict) else None
 
         normalized = {
             "schema_version": self.SCHEMA_VERSION,
             "metadata": {
-                "title": metadata.get('title'),
-                "author": metadata.get('author'),
-                "language": metadata.get('language'),
-                "page_count": metadata.get('page_count'),
-                "producer": metadata.get('producer'),
+                "title": metadata.get('title') if isinstance(metadata, dict) else None,
+                "author": authors[0] if authors else (metadata.get('author') if isinstance(metadata, dict) else None),
+                "language": languages[0] if languages else (metadata.get('language') if isinstance(metadata, dict) else None),
+                "page_count": document_metadata.get('page_count') if isinstance(document_metadata, dict) else metadata.get('page_count'),
+                "producer": producer,
             },
             "pages": []
         }

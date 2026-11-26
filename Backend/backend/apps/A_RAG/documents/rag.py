@@ -120,7 +120,15 @@ class DocumentChunkService:
         if isinstance(content, str):
             return content.strip()
         if isinstance(content, list):
-            return '\n'.join(str(item) for item in content if item is not None).strip()
+            parts = []
+            for item in content:
+                if isinstance(item, dict):
+                    item_text = item.get('text') or item.get('content')
+                    if item_text:
+                        parts.append(str(item_text).strip())
+                elif item is not None:
+                    parts.append(str(item).strip())
+            return '\n'.join(part for part in parts if part).strip()
         if isinstance(content, dict):
             return str(content.get('text') or content.get('content') or '').strip()
         return str(content).strip() if content is not None else ''
